@@ -27,7 +27,7 @@ export default function CheckPage() {
     let stream: MediaStream | null = null;
     let audioCtx: AudioContext | null = null;
     let analyser: AnalyserNode | null = null;
-    let dataArray: Uint8Array | null = null;
+    let dataArray: Uint8Array<ArrayBuffer> | null = null;
     let rafId: number | null = null;
 
     const start = async () => {
@@ -46,7 +46,7 @@ export default function CheckPage() {
         analyser = audioCtx.createAnalyser();
         analyser.fftSize = 1024;
         analyser.smoothingTimeConstant = 0.6;
-        dataArray = new Uint8Array(analyser.fftSize);
+        dataArray = new Uint8Array(analyser.fftSize) as Uint8Array<ArrayBuffer>;
         source.connect(analyser);
 
         const loop = () => {

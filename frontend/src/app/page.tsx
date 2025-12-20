@@ -9,9 +9,14 @@ export default function Home() {
       <div className={styles.container}>
         <div className={styles.topBar}>
           <div className={styles.brand}>AI Interview Trainer</div>
-          <Link className={styles.link} href="/lab">
-            Lab view
-          </Link>
+          <div className={styles.pillRow}>
+            <Link className={styles.link} href="/history">
+              History
+            </Link>
+            <Link className={styles.link} href="/lab">
+              Lab view
+            </Link>
+          </div>
         </div>
 
         <div className={styles.card}>
@@ -27,10 +32,12 @@ export default function Home() {
             <Link className={styles.secondary} href="/lab">
               Open lab mode
             </Link>
+            <Link className={styles.secondary} href="/history">
+              View history
+            </Link>
           </div>
         </div>
       </div>
     </main>
   );
 }
-

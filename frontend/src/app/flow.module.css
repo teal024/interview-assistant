@@ -137,6 +137,12 @@
   gap: 12px;
 }
 
+.optionGridTwo {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
 .option {
   border: 1px solid #e2e8f0;
   background: #ffffff;
@@ -301,6 +307,59 @@
   background: linear-gradient(90deg, #22c55e, #2563eb);
 }
 
+.sensorVideo {
+  position: absolute;
+  width: 2px;
+  height: 2px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.nudge {
+  margin-top: 10px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 14px;
+  border: 1px solid rgba(37, 99, 235, 0.24);
+  background: rgba(37, 99, 235, 0.08);
+  color: #0f172a;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.nudgeDot {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  background: #2563eb;
+  box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.12);
+  flex: 0 0 auto;
+}
+
+.detailsSummary {
+  cursor: pointer;
+  font-weight: 700;
+  color: #0f172a;
+  list-style: none;
+}
+
+.detailsSummary::-webkit-details-marker {
+  display: none;
+}
+
+.detailsSummary::after {
+  content: "▾";
+  float: right;
+  color: #475569;
+  font-weight: 700;
+}
+
+details[open] .detailsSummary::after {
+  content: "▴";
+}
+
 .center {
   display: grid;
   place-items: center;
@@ -308,6 +367,10 @@
 
 @media (max-width: 880px) {
   .optionGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .optionGridTwo {
     grid-template-columns: 1fr;
   }
 

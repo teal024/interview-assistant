@@ -25,6 +25,8 @@ export default function LabPage() {
     sendAnswer,
     setMessages,
     sendCheckIn,
+    sendTelemetry,
+    turn,
   } = useInterview();
 
   const [confidence, setConfidence] = useState<number>(70);
@@ -42,11 +44,14 @@ export default function LabPage() {
     style,
     question,
     sessionId,
+    turn,
     mediaStream,
     sensorMetrics,
     analytics,
     setAnalytics,
     sendAnswer,
+    sendTelemetry,
+    nudgesEnabled: false,
   });
   const {
     draft,

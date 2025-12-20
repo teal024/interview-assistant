@@ -52,6 +52,8 @@ class SessionState:
         consented: bool = False,
         accent: Optional[str] = None,
         notes: Optional[str] = None,
+        pack: str = "swe_behavioral",
+        difficulty: str = "standard",
     ) -> None:
         self.session_id = str(uuid.uuid4())
         self.style = style
@@ -59,6 +61,8 @@ class SessionState:
         self.consented = consented
         self.accent = accent
         self.notes = notes
+        self.pack = pack
+        self.difficulty = difficulty
         self.turn = 0
         self.last_question: Optional[str] = None
         self.history: List[Tuple[str, str]] = []  # recent (question, answer) pairs
@@ -80,6 +84,81 @@ QUESTION_BANK: Dict[InterviewerStyle, List[str]] = {
     ],
 }
 
+QUESTION_PACKS: Dict[str, Dict[str, List[str]]] = {
+    "swe_behavioral": {
+        "standard": [
+            "Tell me about a time you had to make a tradeoff. What did you choose and why?",
+            "Describe a disagreement with a teammate. How did you resolve it?",
+            "Tell me about a project where you took ownership end-to-end. What was the outcome?",
+            "Describe a time you got critical feedback. What did you change afterward?",
+            "Tell me about a time you improved a process. What changed because of you?",
+            "What’s a technical decision you’re proud of? Walk me through your reasoning.",
+        ],
+        "hard": [
+            "Pick one project. In 60 seconds, tell me the problem, your role, and the measurable outcome.",
+            "Tell me about a time you missed the mark. What did you do next week to fix it?",
+            "Describe a tradeoff you made under time pressure. What did you sacrifice, and what did you protect?",
+            "Tell me about a conflict you caused. What would your teammate say you did wrong?",
+            "What’s the hardest bug you’ve shipped? How did you detect and remediate it?",
+            "Explain your impact with numbers. If you don’t have exact metrics, estimate responsibly.",
+        ],
+    },
+    "swe_system_design": {
+        "standard": [
+            "Design a URL shortener. What are your APIs, storage, and scaling plan?",
+            "Design a real-time chat system. How do you handle delivery, ordering, and offline clients?",
+            "Design a rate limiter for an API gateway. What data structures do you use?",
+            "Design a notifications system (email/push). How do you handle retries and deduplication?",
+            "Design a file upload service. How do you handle large files and resumable uploads?",
+            "Design a metrics pipeline for product analytics. What is your event model and storage?",
+        ],
+        "hard": [
+            "Design a feed ranking service. What are your latency targets, failure modes, and fallbacks?",
+            "Design a multi-tenant system. How do you isolate noisy neighbors and enforce quotas?",
+            "Design a caching layer. When does caching hurt correctness, and how do you invalidate safely?",
+            "Design an idempotent payments API. What are your consistency guarantees?",
+            "Design a search autocomplete service. How do you keep it fast and fresh?",
+            "Design a logging pipeline. How do you protect PII and handle high-cardinality labels?",
+        ],
+    },
+    "data_science_ml": {
+        "standard": [
+            "Explain a model you deployed. How did you evaluate it and monitor drift?",
+            "Design an A/B test for a ranking change. What metrics and pitfalls matter?",
+            "Walk me through feature engineering for a sparse, high-cardinality dataset.",
+            "How would you debug a sudden drop in model performance in production?",
+            "Design a recommendation system for a new product with cold start.",
+            "How do you decide between a simpler baseline and a more complex model?",
+        ],
+        "hard": [
+            "You have label leakage. How do you detect it and fix the pipeline end-to-end?",
+            "Design an online learning system. What are your safeguards against feedback loops?",
+            "Explain precision/recall tradeoffs for an imbalanced classifier and how you pick thresholds.",
+            "Design a monitoring suite: drift, bias, latency, and business KPIs. What alerts fire first?",
+            "Your model is unfair across a subgroup. What is your investigation and mitigation plan?",
+            "Design an LLM evaluation harness for a support agent. How do you measure correctness and harm?",
+        ],
+    },
+    "leadership": {
+        "standard": [
+            "Tell me about a time you led without authority. What did you do?",
+            "Describe a project that went off track. How did you re-plan and communicate?",
+            "Tell me about a stakeholder conflict. How did you align priorities?",
+            "Describe a time you mentored someone. What changed afterward?",
+            "How do you balance speed vs quality on a team?",
+            "Tell me about a time you changed your mind after learning new info.",
+        ],
+        "hard": [
+            "A project is late and stakeholders are angry. What do you do in the next 48 hours?",
+            "Tell me about a time you made a decision with incomplete data. What guardrails did you use?",
+            "You have to cut scope by 40%. What do you cut, and how do you sell it?",
+            "Describe a failure you were responsible for. What did you change systemically?",
+            "How do you handle a high performer who is toxic to the team?",
+            "Tell me about a time you pushed back on leadership. What did it cost you?",
+        ],
+    },
+}
+
 FOLLOW_UPS: Dict[InterviewerStyle, List[str]] = {
     InterviewerStyle.SUPPORTIVE: [
         "Nice—can you share a detail that shows your impact?",
@@ -96,55 +175,263 @@ FOLLOW_UPS: Dict[InterviewerStyle, List[str]] = {
 }
 
 
-def pick_question(style: InterviewerStyle, turn: int) -> str:
-    items = QUESTION_BANK.get(style) or QUESTION_BANK[InterviewerStyle.NEUTRAL]
+FOLLOW_UP_INTENTS: Dict[str, Dict[InterviewerStyle, List[str]]] = {
+    "clarify": {
+        InterviewerStyle.SUPPORTIVE: [
+            "Can you share one concrete example of what you personally did?",
+            "What’s one specific action you took that made the difference?",
+        ],
+        InterviewerStyle.NEUTRAL: [
+            "What exactly did you do, step by step?",
+            "What was your role, and what did you deliver?",
+        ],
+        InterviewerStyle.COLD: [
+            "You’re being vague. What did you do?",
+            "Cut the fluff—what did you deliver?",
+        ],
+    },
+    "numbers": {
+        InterviewerStyle.SUPPORTIVE: [
+            "What metric moved? Even a rough before/after is helpful.",
+            "Can you quantify the impact—time saved, errors reduced, or revenue influenced?",
+        ],
+        InterviewerStyle.NEUTRAL: [
+            "Give numbers: scope, timeline, and measurable outcome.",
+            "Quantify the result. What changed, and by how much?",
+        ],
+        InterviewerStyle.COLD: [
+            "Numbers. Now.",
+            "You didn’t quantify anything. Give me metrics.",
+        ],
+    },
+    "role": {
+        InterviewerStyle.SUPPORTIVE: [
+            "What part was you vs the team?",
+            "Where did you personally take ownership?",
+        ],
+        InterviewerStyle.NEUTRAL: [
+            "What was your role versus others on the team?",
+            "What decisions were yours, and what did you execute?",
+        ],
+        InterviewerStyle.COLD: [
+            "Stop saying “we.” What did you do?",
+            "What exactly was your responsibility?",
+        ],
+    },
+    "tradeoff": {
+        InterviewerStyle.SUPPORTIVE: [
+            "What tradeoff did you consider, and what pushed you to that choice?",
+            "What options did you reject, and why?",
+        ],
+        InterviewerStyle.NEUTRAL: [
+            "What tradeoffs did you make, and why were they acceptable?",
+            "What constraints shaped your decision?",
+        ],
+        InterviewerStyle.COLD: [
+            "What did you sacrifice, and why was it worth it?",
+            "What was the risk, and how did you mitigate it?",
+        ],
+    },
+    "impact": {
+        InterviewerStyle.SUPPORTIVE: [
+            "What was the outcome, and who benefited?",
+            "How did you know it worked?",
+        ],
+        InterviewerStyle.NEUTRAL: [
+            "What was the result?",
+            "What changed because of your work?",
+        ],
+        InterviewerStyle.COLD: [
+            "What changed because of you?",
+            "What’s the bottom-line impact?",
+        ],
+    },
+    "summarize": {
+        InterviewerStyle.SUPPORTIVE: [
+            "Can you summarize that in one crisp sentence?",
+            "Give me the headline in one sentence, then stop.",
+        ],
+        InterviewerStyle.NEUTRAL: [
+            "Give a one-sentence headline.",
+            "Summarize in one sentence, then we’ll go deeper.",
+        ],
+        InterviewerStyle.COLD: [
+            "One sentence. Go.",
+            "Summarize in one line.",
+        ],
+    },
+}
+
+
+def pick_question(style: InterviewerStyle, turn: int, pack: Optional[str] = None, difficulty: Optional[str] = None) -> str:
+    diff = difficulty or "standard"
+    if pack and pack in QUESTION_PACKS:
+        items = QUESTION_PACKS[pack].get(diff) or QUESTION_PACKS[pack]["standard"]
+    else:
+        items = QUESTION_BANK.get(style) or QUESTION_BANK[InterviewerStyle.NEUTRAL]
     return items[turn % len(items)]
 
 
-def generate_coaching(style: InterviewerStyle, answer: str) -> List[Dict[str, str]]:
-    """Tiny heuristic coach: varies tone per style and reacts to length/pauses."""
-    length = len(answer.strip())
-    has_pause = "..." in answer or "  " in answer
-    fillers = sum(answer.lower().count(f) for f in [" um", " uh", " like "])
+def pick_follow_up(style: InterviewerStyle, answer: str, metrics: Optional[Dict[str, Any]] = None) -> str:
+    raw = (answer or "").strip()
+    lower = raw.lower()
+    metrics = metrics or {}
 
-    base_tips: List[Dict[str, str]] = []
+    # Prefer a summarization follow-up when the answer is very long or delivered at high pace.
+    speaking_rate = _coerce_float(metrics.get("speakingRate"))
+    if len(raw) > 900 or (speaking_rate is not None and speaking_rate > 190):
+        intent = "summarize"
+    else:
+        has_digits = any(ch.isdigit() for ch in raw)
+        tokenized = re.findall(r"\b[a-z']+\b", lower)
+        we_count = sum(1 for t in tokenized if t == "we")
+        i_count = sum(1 for t in tokenized if t == "i")
+        too_short = len(raw) < 160
+        has_metric_words = any(w in lower for w in ["percent", "%", "ms", "latency", "revenue", "users", "kpi", "roi", "errors", "cost"])
 
-    if length < 80:
-        base_tips.append(
-            {
-                "summary": "Add one concrete detail",
-                "detail": "Include a metric or decision so the interviewer can see impact.",
-            }
+        if too_short:
+            intent = "clarify"
+        elif not has_digits and not has_metric_words:
+            intent = "numbers"
+        elif we_count > i_count + 2:
+            intent = "role"
+        elif any(w in lower for w in ["tradeoff", "trade-offs", "decision", "chose", "choice", "versus", "vs", "constraint"]):
+            intent = "tradeoff"
+        else:
+            intent = "impact"
+
+    options = FOLLOW_UP_INTENTS.get(intent, {}).get(style)
+    if options:
+        return random.choice(options)
+    fallback = FOLLOW_UPS.get(style) or FOLLOW_UPS[InterviewerStyle.NEUTRAL]
+    return random.choice(fallback)
+
+
+def _coerce_float(value: Any) -> Optional[float]:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _coerce_int(value: Any) -> Optional[int]:
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def generate_coaching(style: InterviewerStyle, answer: str, metrics: Optional[Dict[str, Any]] = None) -> List[Dict[str, str]]:
+    """Heuristic coach that blends content + delivery signals into two actionable tips."""
+    metrics = metrics or {}
+    raw = answer.strip()
+    length = len(raw)
+    has_digits = any(ch.isdigit() for ch in raw)
+    has_pause_text = "..." in raw or "  " in raw
+    fillers_text = sum(raw.lower().count(f) for f in [" um", " uh", " like "])
+
+    speaking_rate = _coerce_float(metrics.get("speakingRate"))
+    pause_ratio = _coerce_float(metrics.get("pauseRatio"))
+    gaze = _coerce_float(metrics.get("gaze"))
+    fillers_metric = _coerce_int(metrics.get("fillers"))
+    fillers = fillers_metric if fillers_metric is not None else fillers_text
+
+    candidates: List[Tuple[int, Dict[str, str]]] = []
+
+    def add(priority: int, summary: str, detail: str) -> None:
+        candidates.append((priority, {"summary": summary, "detail": detail}))
+
+    # Content fundamentals.
+    if length < 80 or (length < 140 and not has_digits):
+        add(
+            70 if length < 80 else 55,
+            "Add a concrete detail",
+            "Give one number (scope, latency, users) or one decision you made so impact is unmistakable.",
         )
-    if has_pause:
-        base_tips.append(
-            {
-                "summary": "Smooth your pacing",
-                "detail": "Finish sentences before pausing; keep eye contact for the last word.",
-            }
+    if length > 520:
+        add(
+            45,
+            "Lead with a headline",
+            "Start with one sentence (what you did + outcome), then 2–3 supporting facts. Stop before you ramble.",
         )
+
+    # Delivery signals (when available).
+    if speaking_rate is not None:
+        if speaking_rate > 175:
+            add(
+                80 if speaking_rate > 195 else 65,
+                "Slow your pace",
+                "Aim for ~120–160 wpm. Add a half‑beat pause after key nouns (tool, metric, outcome).",
+            )
+        elif speaking_rate < 105 and length >= 120:
+            add(
+                55,
+                "Tighten your tempo",
+                "Speed up slightly by shortening sentences. Remove extra setup and get to the decision/result sooner.",
+            )
+
+    if pause_ratio is not None:
+        if pause_ratio > 0.18:
+            add(
+                70 if pause_ratio > 0.26 else 55,
+                "Reduce long pauses",
+                "Take one planning pause before you start, then keep sentences flowing. If you need time, say “Let me think for a second.”",
+            )
+        elif pause_ratio < 0.05 and speaking_rate and speaking_rate > 165:
+            add(
+                50,
+                "Add deliberate micro-pauses",
+                "A tiny pause before your key point makes you sound more confident (and improves comprehension).",
+            )
+
+    if gaze is not None and gaze < 60:
+        add(
+            60 if gaze < 45 else 50,
+            "Re-center eye contact",
+            "Look at the camera for the first and last sentence. Move your notes closer to the lens to reduce eye travel.",
+        )
+
     if fillers > 1:
-        base_tips.append(
-            {
-                "summary": "Trim fillers",
-                "detail": "Take a breath before answering to reduce “uh/um” clusters.",
-            }
+        add(
+            60 if fillers > 3 else 50,
+            "Replace fillers with silence",
+            "When you feel “um/like” coming, pause silently and restart the sentence. One clean pause beats three fillers.",
         )
-    if not base_tips:
-        base_tips.append(
-            {
-                "summary": "Good structure",
-                "detail": "Keep using concise, past-tense statements to anchor the story.",
-            }
+    elif has_pause_text and pause_ratio is None:
+        add(
+            40,
+            "Smooth your pacing",
+            "Finish sentences before pausing; keep your eyes steady through the final word.",
         )
 
-    # Style-specific framing for novelty and tone.
+    if not candidates:
+        add(
+            10,
+            "Keep the structure",
+            "You’re clear and concise. Next answer: add one crisp metric to make it unforgettable.",
+        )
+
+    candidates.sort(key=lambda item: item[0], reverse=True)
+    tips: List[Dict[str, str]] = []
+    seen: set[str] = set()
+    for _, tip in candidates:
+        if tip["summary"] in seen:
+            continue
+        tips.append(tip)
+        seen.add(tip["summary"])
+        if len(tips) >= 2:
+            break
+
     tone_prefix = {
         InterviewerStyle.SUPPORTIVE: "Encouraging: ",
         InterviewerStyle.NEUTRAL: "",
         InterviewerStyle.COLD: "Direct: ",
     }[style]
-    return [{**tip, "detail": f"{tone_prefix}{tip['detail']}"} for tip in base_tips[:2]]
+    return [{**tip, "detail": f"{tone_prefix}{tip['detail']}"} for tip in tips]
 
 
 def _extract_json_block(text: str) -> Optional[Dict[str, Any]]:
@@ -202,10 +489,10 @@ def parse_question_response(text: str) -> Optional[str]:
 
 
 async def llm_generate_coaching(
-    style: InterviewerStyle, question: str, answer: str, turn: int
+    style: InterviewerStyle, question: str, answer: str, turn: int, metrics: Optional[Dict[str, Any]] = None
 ) -> Optional[Tuple[Optional[str], List[Dict[str, str]]]]:
-    NVIDIA_API_KEY = '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'
-    if not NVIDIA_API_KEY:
+    api_key = NVIDIA_API_KEY or os.getenv("NVIDIA_API_KEY")
+    if not api_key:
         LOG.warning("NVIDIA_API_KEY missing; coaching fallback engaged (style=%s turn=%s)", style, turn)
         return None
     system_prompt = (
@@ -215,12 +502,19 @@ async def llm_generate_coaching(
         "(pacing, confidence, specificity). Tone varies by style: supportive=warm & encouraging; neutral=direct & calm; "
         "cold=pressuring and blunt. Avoid markdown/code fences."
     )
+    metrics = metrics or {}
+    metrics_block = ", ".join(
+        f"{key}={metrics.get(key)}"
+        for key in ["speakingRate", "pauseRatio", "gaze", "fillers"]
+        if metrics.get(key) is not None
+    )
     user_prompt = (
         f"Style: {style.value}\nTurn: {turn}\nQuestion: {question}\nUser answer: {answer}\n"
+        f"Delivery signals (if present): {metrics_block or 'None'}\n"
         "Return JSON only."
     )
     headers = {
-        "Authorization": f"Bearer {NVIDIA_API_KEY}",
+        "Authorization": f"Bearer {api_key}",
         "Accept": "application/json",
         "Content-Type": "application/json",
     }
@@ -269,10 +563,15 @@ async def llm_generate_coaching(
 
 
 async def llm_generate_question(
-    style: InterviewerStyle, turn: int, previous_question: Optional[str] = None, history: Optional[List[Tuple[str, str]]] = None
+    style: InterviewerStyle,
+    turn: int,
+    previous_question: Optional[str] = None,
+    history: Optional[List[Tuple[str, str]]] = None,
+    pack: Optional[str] = None,
+    difficulty: Optional[str] = None,
 ) -> Optional[str]:
-    NVIDIA_API_KEY = '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'
-    if not NVIDIA_API_KEY:
+    api_key = NVIDIA_API_KEY or os.getenv("NVIDIA_API_KEY")
+    if not api_key:
         LOG.warning("NVIDIA_API_KEY missing; question fallback engaged (style=%s turn=%s)", style, turn)
         return None
     system_prompt = (
@@ -284,13 +583,15 @@ async def llm_generate_question(
     history_block = "\n".join([f"Q: {q}\nA: {a}" for q, a in recent_pairs]) or "None yet"
     user_prompt = (
         f"Style: {style.value}\n"
+        f"Practice pack: {pack or 'default'}\n"
+        f"Difficulty: {difficulty or 'standard'}\n"
         f"Turn index (0-based): {turn}\n"
         f"Previous question: {previous_question or 'None'}\n"
         f"Recent Q/A (most recent last):\n{history_block}\n"
         "Give the next single interview question in JSON only. Ask something that logically follows the last answer; avoid repeats."
     )
     headers = {
-        "Authorization": f"Bearer {NVIDIA_API_KEY}",
+        "Authorization": f"Bearer {api_key}",
         "Accept": "application/json",
         "Content-Type": "application/json",
     }
@@ -549,10 +850,10 @@ async def send_question(
     if override_question:
         question = override_question
     else:
-        question = await llm_generate_question(state.style, state.turn, state.last_question, state.history)
+        question = await llm_generate_question(state.style, state.turn, state.last_question, state.history, state.pack, state.difficulty)
         if not question:
             question_source = "fallback"
-            question = pick_question(state.style, state.turn)
+            question = pick_question(state.style, state.turn, state.pack, state.difficulty)
             LOG.info("Question fallback: style=%s turn=%s", state.style, state.turn)
 
     state.last_question = question
@@ -569,21 +870,46 @@ async def send_question(
             }
         )
 
+    try:
+        async with get_session() as session:
+            session.add(
+                TelemetryRecord(
+                    session_id=state.session_id,
+                    event_type="question",
+                    group_name=state.group,
+                    payload=json.dumps(
+                        {
+                            "turn": state.turn,
+                            "answer_turn": state.turn + 1,
+                            "question": question,
+                            "style": state.style.value,
+                            "pack": state.pack,
+                            "difficulty": state.difficulty,
+                            "source": question_source,
+                        }
+                    ),
+                )
+            )
+            await session.commit()
+    except Exception as exc:
+        LOG.warning("Failed to log question telemetry (session=%s): %s", state.session_id, exc)
 
-async def send_reaction(ws: WebSocket, state: SessionState, answer: str, question: str, turn: int) -> Tuple[str, List[Dict[str, str]]]:
+
+async def send_reaction(
+    ws: WebSocket, state: SessionState, answer: str, question: str, turn: int, metrics: Optional[Dict[str, Any]] = None
+) -> Tuple[str, List[Dict[str, str]]]:
     follow_up: Optional[str] = None
     tips: Optional[List[Dict[str, str]]] = None
 
-    llm_result = await llm_generate_coaching(state.style, question, answer, turn)
+    llm_result = await llm_generate_coaching(state.style, question, answer, turn, metrics)
     if llm_result:
         follow_up, tips = llm_result
 
     if not follow_up:
-        options = FOLLOW_UPS.get(state.style, FOLLOW_UPS[InterviewerStyle.NEUTRAL])
-        follow_up = random.choice(options)
+        follow_up = pick_follow_up(state.style, answer, metrics)
         LOG.info("Follow-up fallback: style=%s turn=%s", state.style, turn)
     if not tips:
-        tips = generate_coaching(state.style, answer)
+        tips = generate_coaching(state.style, answer, metrics)
         LOG.info("Tips fallback: style=%s turn=%s", state.style, turn)
 
     return follow_up or "", tips
@@ -592,8 +918,12 @@ async def send_reaction(ws: WebSocket, state: SessionState, answer: str, questio
 async def handle_message(ws: WebSocket, state: SessionState, payload: Dict[str, Any]) -> None:
     msg_type = payload.get("type")
     if msg_type == "start_session":
+        # Always mint a fresh session id so "restart" creates a new DB row (no PK collisions).
+        state.session_id = str(uuid.uuid4())
         requested_style = payload.get("style")
         group = payload.get("group") or state.group
+        requested_pack = payload.get("pack")
+        requested_difficulty = payload.get("difficulty")
         state.turn = 0
         state.last_question = None
         state.history = []
@@ -601,6 +931,10 @@ async def handle_message(ws: WebSocket, state: SessionState, payload: Dict[str, 
         state.consented = bool(payload.get("consent"))
         state.accent = payload.get("accent")
         state.notes = payload.get("notes")
+        if isinstance(requested_pack, str) and requested_pack in QUESTION_PACKS:
+            state.pack = requested_pack
+        if isinstance(requested_difficulty, str) and requested_difficulty in ("standard", "hard"):
+            state.difficulty = requested_difficulty
         if requested_style and requested_style in InterviewerStyle._value2member_map_:
             state.style = InterviewerStyle(requested_style)
         state.group = group
@@ -615,6 +949,14 @@ async def handle_message(ws: WebSocket, state: SessionState, payload: Dict[str, 
                     notes=state.notes,
                 )
             )
+            session.add(
+                TelemetryRecord(
+                    session_id=state.session_id,
+                    event_type="session_meta",
+                    group_name=group,
+                    payload=json.dumps({"pack": state.pack, "difficulty": state.difficulty}),
+                )
+            )
             await session.commit()
         await ws.send_json(
             {
@@ -624,6 +966,8 @@ async def handle_message(ws: WebSocket, state: SessionState, payload: Dict[str, 
                 "turn": state.turn,
                 "group": group,
                 "consent": state.consented,
+                "pack": state.pack,
+                "difficulty": state.difficulty,
             }
         )
         await send_question(ws, state)
@@ -639,10 +983,10 @@ async def handle_message(ws: WebSocket, state: SessionState, payload: Dict[str, 
 
     if msg_type == "user_answer":
         answer = payload.get("answer", "")
-        asked_question = state.last_question or pick_question(state.style, state.turn)
+        asked_question = state.last_question or pick_question(state.style, state.turn, state.pack, state.difficulty)
         state.turn += 1
         turn_label = state.turn  # maintain existing turn numbering for the UI/DB
-        metrics = payload.get("metrics") or {}
+        metrics = payload.get("metrics") if isinstance(payload.get("metrics"), dict) else {}
         async with get_session() as session:
             session.add(
                 AnswerRecord(
@@ -663,9 +1007,22 @@ async def handle_message(ws: WebSocket, state: SessionState, payload: Dict[str, 
         if len(state.history) > 4:
             state.history = state.history[-4:]
 
-        follow_up, tips = await send_reaction(ws, state, answer, asked_question, turn_label)
+        follow_up, tips = await send_reaction(ws, state, answer, asked_question, turn_label, metrics)
         if tips:
             await ws.send_json({"type": "tips", "turn": turn_label, "items": tips})
+            try:
+                async with get_session() as session:
+                    session.add(
+                        TelemetryRecord(
+                            session_id=state.session_id,
+                            event_type="tips",
+                            group_name=state.group,
+                            payload=json.dumps({"turn": turn_label, "items": tips}),
+                        )
+                    )
+                    await session.commit()
+            except Exception as exc:
+                LOG.warning("Failed to log tips telemetry (session=%s): %s", state.session_id, exc)
 
         if state.awaiting_followup:
             # This answer was for a follow-up; resume normal questioning.
@@ -758,6 +1115,57 @@ async def log_checkin(payload: CheckInPayload) -> Dict[str, str]:
     return {"status": "ok"}
 
 
+class CommentPayload(BaseModel):
+    session_id: str = Field(..., alias="sessionId")
+    turn: int
+    text: str
+    author: Optional[str] = None
+    kind: Optional[str] = "comment"  # "comment" | "assignment"
+
+
+@app.post("/comments")
+async def add_comment(payload: CommentPayload) -> Dict[str, str]:
+    event_type = "assignment" if payload.kind == "assignment" else "comment"
+    async with get_session() as session:
+        group = None
+        session_row = await session.get(SessionRecord, payload.session_id)
+        if session_row:
+            group = session_row.group_name
+        session.add(
+            TelemetryRecord(
+                session_id=payload.session_id,
+                event_type=event_type,
+                group_name=group,
+                payload=json.dumps(
+                    {
+                        "turn": payload.turn,
+                        "text": payload.text,
+                        "author": payload.author,
+                        "kind": payload.kind,
+                    }
+                ),
+            )
+        )
+        await session.commit()
+    return {"status": "ok"}
+
+
+@app.get("/comments/{session_id}")
+async def list_comments(session_id: str) -> Dict[str, Any]:
+    async with get_session() as session:
+        comments = (
+            await session.exec(
+                select(TelemetryRecord)
+                .where(
+                    TelemetryRecord.session_id == session_id,
+                    TelemetryRecord.event_type.in_(["comment", "assignment"]),
+                )
+                .order_by(TelemetryRecord.created_at.asc())
+            )
+        ).all()
+        return {"items": [c.model_dump() for c in comments]}
+
+
 @app.get("/export/session/{session_id}")
 async def export_session(session_id: str) -> Dict[str, Any]:
     async with get_session() as session:
@@ -781,6 +1189,41 @@ async def export_session(session_id: str) -> Dict[str, Any]:
             "checkins": [c.model_dump() for c in checkins],
             "telemetry": [t.model_dump() for t in telemetry],
         }
+
+
+@app.get("/sessions")
+async def list_sessions(limit: int = 20) -> Dict[str, Any]:
+    limit = max(1, min(int(limit), 100))
+
+    def mean(values: List[Optional[float]]) -> Optional[float]:
+        vals = [v for v in values if v is not None]
+        return sum(vals) / len(vals) if vals else None
+
+    async with get_session() as session:
+        sessions = (
+            await session.exec(select(SessionRecord).order_by(SessionRecord.created_at.desc()).limit(limit))
+        ).all()
+
+        items: List[Dict[str, Any]] = []
+        for row in sessions:
+            answers = (
+                await session.exec(select(AnswerRecord).where(AnswerRecord.session_id == row.id))
+            ).all()
+            last_answer_at = max((a.created_at for a in answers), default=None)
+            items.append(
+                {
+                    **row.model_dump(),
+                    "n_answers": len(answers),
+                    "last_turn": max((a.turn for a in answers), default=0),
+                    "last_answer_at": last_answer_at,
+                    "avg_speaking_rate": mean([a.speaking_rate for a in answers]),
+                    "avg_pause_ratio": mean([a.pause_ratio for a in answers]),
+                    "avg_gaze": mean([a.gaze for a in answers]),
+                    "avg_fillers": mean([float(a.fillers) if a.fillers is not None else None for a in answers]),
+                }
+            )
+
+        return {"items": items}
 
 
 @app.get("/metrics/summary")

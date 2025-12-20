@@ -2,27 +2,44 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import styles from "../flow.module.css";
 import { STYLE_HELP, STYLE_LABELS } from "../lib/interviewClient";
-import { loadSetup, saveSetup, type InterviewSetup } from "../lib/flowStorage";
+import { DEFAULT_SETUP, saveSetup, useStoredSetup, type Difficulty, type PracticePack } from "../lib/flowStorage";
 
-const DEFAULT_SETUP: InterviewSetup = {
-  style: "neutral",
-  group: "treatment",
-  consent: false,
-  accent: "",
-  notes: "",
-  autoListen: true,
-  autoSendVoice: true,
+const PACK_LABELS: Record<PracticePack, string> = {
+  swe_behavioral: "SWE behavioral",
+  swe_system_design: "SWE system design",
+  data_science_ml: "Data science / ML",
+  leadership: "Leadership",
+};
+
+const PACK_HELP: Record<PracticePack, string> = {
+  swe_behavioral: "STAR answers, conflict, ownership, impact.",
+  swe_system_design: "Architecture, tradeoffs, scaling, reliability.",
+  data_science_ml: "Modeling, evaluation, experimentation, monitoring.",
+  leadership: "Stakeholders, prioritization, influence, delivery.",
+};
+
+const PACK_RUBRIC: Record<PracticePack, string[]> = {
+  swe_behavioral: ["Headline first", "Clear role (I vs we)", "Measurable impact", "Tight STAR structure"],
+  swe_system_design: ["Clarify requirements", "Tradeoffs + constraints", "Reliability + failure modes", "APIs + data model"],
+  data_science_ml: ["Evaluation + baselines", "Monitoring + drift", "Experiment design", "Failure analysis"],
+  leadership: ["Stakeholder alignment", "Decision clarity", "Execution plan", "Learning + accountability"],
+};
+
+const DIFFICULTY_LABELS: Record<Difficulty, string> = {
+  standard: "Standard",
+  hard: "Hard",
 };
 
 export default function SetupPage() {
   const router = useRouter();
-  const [setup, setSetup] = useState<InterviewSetup>(() => loadSetup() ?? DEFAULT_SETUP);
+  const storedSetup = useStoredSetup();
+  const setup = storedSetup ?? DEFAULT_SETUP;
   const [showOptions, setShowOptions] = useState<boolean>(false);
 
-  const canContinue = useMemo(() => setup.consent, [setup.consent]);
+  const canContinue = setup.consent;
 
   return (
     <main className={styles.shell}>
@@ -35,11 +52,58 @@ export default function SetupPage() {
         </div>
 
         <div className={styles.card}>
-          <p className={styles.kicker}>Persona</p>
-          <h1 className={styles.title}>Choose your interviewer.</h1>
-          <p className={styles.subtitle}>Pick a tone for this session. You can change it later from the Coach tab.</p>
+          <p className={styles.kicker}>Setup</p>
+          <h1 className={styles.title}>Pick your practice.</h1>
+          <p className={styles.subtitle}>Choose a pack, then choose your interviewer tone. We keep the session focused once you start.</p>
 
           <div className={styles.section}>
+            <h2 className={styles.cardTitle}>Practice pack</h2>
+            <div className={styles.optionGridTwo} role="radiogroup" aria-label="Practice pack">
+              {(Object.keys(PACK_LABELS) as PracticePack[]).map((p) => (
+                <button
+                  key={p}
+                  type="button"
+                  role="radio"
+                  aria-checked={setup.pack === p}
+                  className={`${styles.option} ${setup.pack === p ? styles.optionActive : ""}`}
+                  onClick={() => saveSetup({ ...setup, pack: p })}
+                >
+                  <div className={styles.optionTitle}>{PACK_LABELS[p]}</div>
+                  <span className={styles.optionHelp}>{PACK_HELP[p]}</span>
+                </button>
+              ))}
+            </div>
+            <div className={styles.panel} style={{ marginTop: 12 }}>
+              <div className={styles.optionTitle}>Rubric</div>
+              <div className={styles.cardText} style={{ marginTop: 8 }}>
+                {PACK_RUBRIC[setup.pack].map((item) => (
+                  <div key={item}>• {item}</div>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          <div className={styles.section}>
+            <h2 className={styles.cardTitle}>Difficulty</h2>
+            <div className={styles.pillRow} role="radiogroup" aria-label="Difficulty">
+              {(["standard", "hard"] as Difficulty[]).map((d) => (
+                <button
+                  key={d}
+                  type="button"
+                  role="radio"
+                  aria-checked={setup.difficulty === d}
+                  className={`${styles.pill} ${setup.difficulty === d ? styles.pillActive : ""}`}
+                  onClick={() => saveSetup({ ...setup, difficulty: d })}
+                >
+                  {DIFFICULTY_LABELS[d]}
+                </button>
+              ))}
+            </div>
+            <p className={styles.helper}>Hard mode pushes for concision and numbers.</p>
+          </div>
+
+          <div className={styles.section}>
+            <h2 className={styles.cardTitle}>Interviewer tone</h2>
             <div className={styles.optionGrid} role="radiogroup" aria-label="Interviewer style">
               {(["supportive", "neutral", "cold"] as const).map((s) => (
                 <button
@@ -48,7 +112,7 @@ export default function SetupPage() {
                   role="radio"
                   aria-checked={setup.style === s}
                   className={`${styles.option} ${setup.style === s ? styles.optionActive : ""}`}
-                  onClick={() => setSetup((prev) => ({ ...prev, style: s }))}
+                  onClick={() => saveSetup({ ...setup, style: s })}
                 >
                   <div className={styles.optionTitle}>{STYLE_LABELS[s]}</div>
                   <span className={styles.optionHelp}>{STYLE_HELP[s]}</span>
@@ -63,7 +127,7 @@ export default function SetupPage() {
               <input
                 type="checkbox"
                 checked={setup.consent}
-                onChange={(e) => setSetup((prev) => ({ ...prev, consent: e.target.checked }))}
+                onChange={(e) => saveSetup({ ...setup, consent: e.target.checked })}
               />
               <span>
                 I consent to local processing of mic/camera signals for coaching (pace/gaze/latency). You can export session
@@ -89,7 +153,7 @@ export default function SetupPage() {
                       className={styles.input}
                       type="text"
                       value={setup.accent}
-                      onChange={(e) => setSetup((prev) => ({ ...prev, accent: e.target.value }))}
+                      onChange={(e) => saveSetup({ ...setup, accent: e.target.value })}
                       placeholder="e.g., US Southern, Nigerian English"
                     />
                   </label>
@@ -99,7 +163,7 @@ export default function SetupPage() {
                       className={styles.input}
                       type="text"
                       value={setup.notes}
-                      onChange={(e) => setSetup((prev) => ({ ...prev, notes: e.target.value }))}
+                      onChange={(e) => saveSetup({ ...setup, notes: e.target.value })}
                       placeholder="Any accessibility or fairness notes"
                     />
                   </label>
@@ -111,7 +175,7 @@ export default function SetupPage() {
                     <input
                       type="checkbox"
                       checked={setup.autoListen}
-                      onChange={(e) => setSetup((prev) => ({ ...prev, autoListen: e.target.checked }))}
+                      onChange={(e) => saveSetup({ ...setup, autoListen: e.target.checked })}
                     />
                     <span>Auto-listen after each question</span>
                   </label>
@@ -119,10 +183,41 @@ export default function SetupPage() {
                     <input
                       type="checkbox"
                       checked={setup.autoSendVoice}
-                      onChange={(e) => setSetup((prev) => ({ ...prev, autoSendVoice: e.target.checked }))}
+                      onChange={(e) => saveSetup({ ...setup, autoSendVoice: e.target.checked })}
                     />
                     <span>Auto-send when speech finishes</span>
                   </label>
+                </div>
+
+                <div className={styles.section}>
+                  <h3 className={styles.cardTitle}>Live nudges</h3>
+                  <label className={styles.checkbox}>
+                    <input
+                      type="checkbox"
+                      checked={setup.nudgesEnabled}
+                      onChange={(e) => saveSetup({ ...setup, nudgesEnabled: e.target.checked })}
+                    />
+                    <span>Show real-time nudges while you speak (pace, rambling, centering)</span>
+                  </label>
+                  <label className={styles.checkbox}>
+                    <input
+                      type="checkbox"
+                      checked={setup.nudgeSound}
+                      onChange={(e) => saveSetup({ ...setup, nudgeSound: e.target.checked })}
+                      disabled={!setup.nudgesEnabled}
+                    />
+                    <span>Play a subtle sound cue</span>
+                  </label>
+                  <label className={styles.checkbox}>
+                    <input
+                      type="checkbox"
+                      checked={setup.nudgeHaptics}
+                      onChange={(e) => saveSetup({ ...setup, nudgeHaptics: e.target.checked })}
+                      disabled={!setup.nudgesEnabled}
+                    />
+                    <span>Vibrate on mobile (if supported)</span>
+                  </label>
+                  <p className={styles.helper}>Nudges are throttled so they only appear when you cross a threshold.</p>
                 </div>
 
                 <div className={styles.section}>
@@ -135,7 +230,7 @@ export default function SetupPage() {
                         role="radio"
                         aria-checked={setup.group === g}
                         className={`${styles.pill} ${setup.group === g ? styles.pillActive : ""}`}
-                        onClick={() => setSetup((prev) => ({ ...prev, group: g }))}
+                        onClick={() => saveSetup({ ...setup, group: g })}
                       >
                         {g === "treatment" ? "Treatment (multi-style)" : "Control (neutral only)"}
                       </button>

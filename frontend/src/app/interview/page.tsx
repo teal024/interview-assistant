@@ -2,19 +2,43 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import styles from "../flow.module.css";
 import { Avatar } from "../components/Avatar";
 import { STYLE_HELP, STYLE_LABELS, type Style, useInterview, useMediaSensors } from "../lib/interviewClient";
-import { consumeAutostart, loadSetup, saveReviewSnapshot } from "../lib/flowStorage";
+import { consumeAutostart, saveReviewSnapshot, useStoredSetup, type InterviewSetup } from "../lib/flowStorage";
 import { useVoiceInterview } from "../lib/useVoiceInterview";
 
 type Tab = "answer" | "coach" | "transcript";
 
 export default function InterviewPage() {
+  const storedSetup = useStoredSetup();
+  if (storedSetup === undefined) {
+    return (
+      <main className={styles.shell}>
+        <div className={styles.container}>
+          <div className={styles.card}>
+            <p className={styles.kicker}>Interview</p>
+            <h1 className={styles.title}>Loading…</h1>
+            <p className={styles.subtitle}>Preparing your session.</p>
+            <div className={styles.buttonRow}>
+              <Link className={styles.secondary} href="/setup">
+                Back to setup
+              </Link>
+            </div>
+          </div>
+        </div>
+      </main>
+    );
+  }
+
+  return <InterviewInner setup={storedSetup} />;
+}
+
+function InterviewInner({ setup }: { setup: InterviewSetup | null }) {
   const router = useRouter();
   const [tab, setTab] = useState<Tab>("answer");
-  const setup = useMemo(() => loadSetup(), []);
+  const previewRef = useRef<HTMLVideoElement | null>(null);
 
   const {
     status,
@@ -30,6 +54,8 @@ export default function InterviewPage() {
     analytics,
     setAnalytics,
     sendAnswer,
+    sendTelemetry,
+    turn,
   } = useInterview();
 
   const { metrics: sensorMetrics, videoRef, streamError, stream: mediaStream } = useMediaSensors(status === "active");
@@ -47,13 +73,18 @@ export default function InterviewPage() {
     style,
     question,
     sessionId,
+    turn,
     mediaStream,
     sensorMetrics,
     analytics,
     setAnalytics,
     sendAnswer,
+    sendTelemetry,
     initialAutoListen: setup?.autoListen,
     initialAutoSendVoice: setup?.autoSendVoice,
+    nudgesEnabled: setup?.nudgesEnabled,
+    nudgeSound: setup?.nudgeSound,
+    nudgeHaptics: setup?.nudgeHaptics,
   });
 
   const {
@@ -68,6 +99,7 @@ export default function InterviewPage() {
     sttError,
     ttsError,
     interviewerTalking,
+    nudge,
     listening,
     userTalking,
     startRecording,
@@ -80,12 +112,12 @@ export default function InterviewPage() {
     if (!setup) return;
     if (status !== "idle" && status !== "closed") return;
     if (!consumeAutostart()) return;
-    start(setup.style, setup.group, setup.consent, setup.accent, setup.notes);
+    start(setup.style, setup.group, setup.consent, setup.accent, setup.notes, setup.pack, setup.difficulty);
   }, [setup, start, status]);
 
   const handleStart = useCallback(() => {
     if (!setup) return;
-    start(setup.style, setup.group, setup.consent, setup.accent, setup.notes);
+    start(setup.style, setup.group, setup.consent, setup.accent, setup.notes, setup.pack, setup.difficulty);
   }, [setup, start]);
 
   const handleEnd = useCallback(() => {
@@ -104,13 +136,13 @@ export default function InterviewPage() {
   }, [messages, router, sessionId, setup, stop, stopRecording, tips]);
 
   useEffect(() => {
-    const el = videoRef.current;
-    if (!el || !mediaStream) return;
+    const el = previewRef.current;
+    if (!el || !mediaStream || tab !== "coach") return;
     if (el.srcObject !== mediaStream) {
       el.srcObject = mediaStream;
     }
     el.play().catch(() => undefined);
-  }, [mediaStream, tab, videoRef]);
+  }, [mediaStream, tab]);
 
   const styleControls = (
     <div className={styles.pillRow} role="radiogroup" aria-label="Interviewer style">
@@ -135,6 +167,7 @@ export default function InterviewPage() {
   return (
     <main className={styles.shell}>
       <div className={styles.container}>
+        <video ref={videoRef} muted playsInline className={styles.sensorVideo} />
         <div className={styles.topBar}>
           <Link className={styles.link} href="/setup">
             Setup
@@ -206,6 +239,12 @@ export default function InterviewPage() {
                   <p className={styles.helper} style={{ marginTop: 8 }}>
                     {listening ? (sttPending ? "Transcribing…" : "Recording — speak naturally.") : "Not recording."}
                   </p>
+                  {nudge && (
+                    <div className={styles.nudge} role="status" aria-live="polite">
+                      <span className={styles.nudgeDot} aria-hidden />
+                      <span>{nudge.message}</span>
+                    </div>
+                  )}
                   {sttError && (
                     <p className={styles.helper} style={{ marginTop: 8, color: "#dc2626" }}>
                       {sttError}
@@ -227,21 +266,23 @@ export default function InterviewPage() {
                 </div>
               </div>
 
-              <div className={styles.panel}>
-                <h2 className={styles.cardTitle}>Text (optional)</h2>
-                <textarea
-                  className={styles.textarea}
-                  placeholder="Speak to fill this automatically. Type only if you prefer."
-                  value={draft}
-                  disabled={status !== "active"}
-                  onChange={(e) => setDraft(e.target.value)}
-                />
-                <div className={styles.buttonRow}>
-                  <button type="button" className={styles.secondary} onClick={sendDraft} disabled={!draft.trim() || status !== "active"}>
-                    Send
-                  </button>
+              <details className={styles.panel}>
+                <summary className={styles.detailsSummary}>Type instead (optional)</summary>
+                <div className={styles.section}>
+                  <textarea
+                    className={styles.textarea}
+                    placeholder="Speak to fill this automatically. Type only if you prefer."
+                    value={draft}
+                    disabled={status !== "active"}
+                    onChange={(e) => setDraft(e.target.value)}
+                  />
+                  <div className={styles.buttonRow}>
+                    <button type="button" className={styles.secondary} onClick={sendDraft} disabled={!draft.trim() || status !== "active"}>
+                      Send
+                    </button>
+                  </div>
                 </div>
-              </div>
+              </details>
             </div>
           </div>
         )}
@@ -253,14 +294,6 @@ export default function InterviewPage() {
             <p className={styles.subtitle}>Small adjustments, big clarity. Keep this open between questions.</p>
 
             <div className={styles.section}>
-              <div className={styles.panel}>
-                <h2 className={styles.cardTitle}>Persona</h2>
-                {styleControls}
-                <p className={styles.helper} style={{ marginTop: 8 }}>
-                  {group === "control" ? "Control group keeps the interviewer neutral." : "Treatment group supports style switching."}
-                </p>
-              </div>
-
               <div className={styles.twoCol}>
                 <div className={styles.panel}>
                   <h2 className={styles.cardTitle}>Signals</h2>
@@ -268,7 +301,7 @@ export default function InterviewPage() {
                     <div className={styles.pillRow} aria-label="Live metrics">
                       <span className={styles.pill}>Rate: {status === "active" ? `${sensorMetrics.speakingRate || "—"} wpm` : "—"}</span>
                       <span className={styles.pill}>Pause: {status === "active" ? sensorMetrics.pauseRatio : "—"}</span>
-                      <span className={styles.pill}>Gaze: {status === "active" ? `${sensorMetrics.gaze}%` : "—"}</span>
+                      <span className={styles.pill}>Center: {status === "active" ? `${sensorMetrics.gaze}%` : "—"}</span>
                       <span className={styles.pill}>Fillers: {analytics.fillers}</span>
                     </div>
                     <p className={styles.helper}>{streamError || "Grant mic/cam permissions to unlock live telemetry."}</p>
@@ -277,21 +310,35 @@ export default function InterviewPage() {
 
                 <div className={styles.panel}>
                   <h2 className={styles.cardTitle}>Preview</h2>
-                  <video ref={videoRef} muted playsInline style={{ width: "100%", borderRadius: 16, background: "#0f172a" }} />
+                  <video ref={previewRef} muted playsInline style={{ width: "100%", borderRadius: 16, background: "#0f172a" }} />
                 </div>
               </div>
 
-              <div className={styles.panel}>
-                <h2 className={styles.cardTitle}>Automation</h2>
-                <label className={styles.checkbox}>
-                  <input type="checkbox" checked={autoListen} onChange={(e) => setAutoListen(e.target.checked)} />
-                  <span>Auto-listen after each question</span>
-                </label>
-                <label className={styles.checkbox}>
-                  <input type="checkbox" checked={autoSendVoice} onChange={(e) => setAutoSendVoice(e.target.checked)} />
-                  <span>Auto-send when speech finishes</span>
-                </label>
-              </div>
+              <details className={styles.panel}>
+                <summary className={styles.detailsSummary}>Session settings</summary>
+                <div className={styles.section}>
+                  <div className={styles.panel}>
+                    <div className={styles.optionTitle}>Interviewer tone</div>
+                    <div style={{ marginTop: 10 }}>{styleControls}</div>
+                    <p className={styles.helper} style={{ marginTop: 10 }}>
+                      {group === "control" ? "Control group keeps the interviewer neutral." : "Treatment group supports style switching."}
+                    </p>
+                  </div>
+                  <div className={styles.panel}>
+                    <div className={styles.optionTitle}>Automation</div>
+                    <div className={styles.section}>
+                      <label className={styles.checkbox}>
+                        <input type="checkbox" checked={autoListen} onChange={(e) => setAutoListen(e.target.checked)} />
+                        <span>Auto-listen after each question</span>
+                      </label>
+                      <label className={styles.checkbox}>
+                        <input type="checkbox" checked={autoSendVoice} onChange={(e) => setAutoSendVoice(e.target.checked)} />
+                        <span>Auto-send when speech finishes</span>
+                      </label>
+                    </div>
+                  </div>
+                </div>
+              </details>
 
               <div className={styles.panel}>
                 <h2 className={styles.cardTitle}>Tips</h2>
