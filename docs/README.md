@@ -24,7 +24,7 @@ Visit `http://localhost:3000` and click **Start Interview**.
 ## Message protocol (beta)
 - `session_ready` (server → client): { session_id, style }
 - `start_session` (client → server): { type: "start_session", style }
-- `question` (server → client): { type: "question", turn, question, style }
+- `question` (server → client): { type: "question", turn, question, style, preface? } (optional short acknowledgement spoken before the question)
 - `user_answer` (client → server): { type: "user_answer", answer, metrics }
 - `interviewer_message` (server → client): { type: "interviewer_message", turn, message, style }
 - `tips` (server → client): { type: "tips", turn, items: [{summary, detail}] }

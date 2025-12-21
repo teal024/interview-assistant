@@ -270,6 +270,7 @@ export function useInterview() {
   const [style, setStyle] = useState<Style>("neutral");
   const [group, setGroup] = useState<"control" | "treatment">("treatment");
   const [question, setQuestion] = useState<string>("");
+  const [questionPreface, setQuestionPreface] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [tips, setTips] = useState<Tip[]>([]);
   const [turn, setTurn] = useState<number>(0);
@@ -292,6 +293,7 @@ export function useInterview() {
     setMessages([]);
     setTips([]);
     setQuestion("");
+    setQuestionPreface(null);
     setTurn(0);
     setAnalytics(initialAnalytics);
     setInterviewerCue(null);
@@ -354,6 +356,7 @@ export function useInterview() {
           break;
         case "question":
           setQuestion(readString(data.question) ?? "");
+          setQuestionPreface(readString(data.preface) ?? null);
           setStyle(readStyle(data.style) ?? style);
           setLastClarification(null);
           {
@@ -465,6 +468,7 @@ export function useInterview() {
       setMessages([]);
       setAnalytics(initialAnalytics);
       setQuestion("");
+      setQuestionPreface(null);
       setTurn(0);
       setSessionId(null);
       setInterviewerCue(null);
@@ -541,6 +545,7 @@ export function useInterview() {
     setGroup,
     switchStyle,
     question,
+    questionPreface,
     messages,
     tips,
     sessionId,

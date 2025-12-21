@@ -357,10 +357,159 @@ def refusal_clarification_response(style: InterviewerStyle, prompt_question: str
     return f"{message} Original prompt: {restated}".strip()
 
 
-def pick_follow_up(style: InterviewerStyle, answer: str, metrics: Optional[Dict[str, Any]] = None) -> str:
+def _is_non_answer(text: str) -> bool:
+    lower = (text or "").strip().lower()
+    if not lower:
+        return True
+
+    normalized = re.sub(r"\s+", " ", lower).strip(" .!?\t")
+    exact_matches = {
+        "idk",
+        "i don't know",
+        "i do not know",
+        "dont know",
+        "don't know",
+        "no idea",
+        "no clue",
+        "not sure",
+        "unsure",
+        "pass",
+        "skip",
+        "i can't answer",
+        "i cannot answer",
+    }
+    if normalized in exact_matches:
+        return True
+
+    patterns = [
+        r"\bi (do not|don't) know\b",
+        r"\bi have no idea\b",
+        r"\bno idea\b",
+        r"\bno clue\b",
+        r"\bnot sure\b",
+        r"\bunsure\b",
+        r"\bblanking\b",
+        r"\bdrawing a blank\b",
+        r"\b(can't|cannot) think of\b",
+        r"\bi (can't|cannot) think of\b",
+        r"\bi don't have an example\b",
+        r"\bi (can't|cannot) (remember|recall)\b",
+        r"\bi (haven't|have not) (done|used|worked with|seen|heard of)\b",
+        r"\bnever (did|done|used|worked with|heard of)\b",
+        r"\bnot familiar\b",
+        r"\bi['’]?m not familiar\b",
+        r"\bunfamiliar\b",
+        r"\b(can't|cannot) answer\b",
+        r"\bpass\b",
+        r"\bskip\b",
+    ]
+    if not any(re.search(pattern, normalized) for pattern in patterns):
+        return False
+
+    words = re.findall(r"\b[a-z']+\b", normalized)
+    word_count = len(words)
+    has_recovery = any(
+        phrase in normalized
+        for phrase in [
+            " but ",
+            " however",
+            " i can",
+            " i could",
+            " i'd ",
+            " i would",
+            " i think",
+            " i guess",
+            " probably",
+            " my guess",
+            " my approach",
+            " i've ",
+            " i have",
+            " i'd start",
+            " i would start",
+            " first,",
+            " for example",
+        ]
+    )
+    if has_recovery and word_count >= 9:
+        return False
+
+    return word_count <= 24 or len(normalized) <= 140
+
+
+def _non_answer_ack_prefix(style: InterviewerStyle) -> str:
+    return {
+        InterviewerStyle.SUPPORTIVE: "No worries — let's move on.",
+        InterviewerStyle.NEUTRAL: "Okay — let's move on.",
+        InterviewerStyle.COLD: "Alright. Next.",
+    }[style]
+
+
+def _non_answer_reframe_preface(style: InterviewerStyle) -> str:
+    return {
+        InterviewerStyle.SUPPORTIVE: "No worries.",
+        InterviewerStyle.NEUTRAL: "Okay.",
+        InterviewerStyle.COLD: "Alright.",
+    }[style]
+
+
+def _answer_ack_preface(style: InterviewerStyle) -> str:
+    options: Dict[InterviewerStyle, List[str]] = {
+        InterviewerStyle.SUPPORTIVE: [
+            "Thanks — got it.",
+            "Got it — thank you.",
+            "Okay, thanks.",
+        ],
+        InterviewerStyle.NEUTRAL: [
+            "Got it.",
+            "Okay.",
+            "Understood.",
+        ],
+        InterviewerStyle.COLD: [
+            "Okay.",
+            "Alright.",
+        ],
+    }
+    return random.choice(options[style])
+
+
+def _question_starts_with_ack(question: str) -> bool:
+    lower = (question or "").strip().lower()
+    if not lower:
+        return False
+    return bool(
+        re.match(
+            r"^(no worries|no problem|ok|okay|alright|understood|got it|fair|thanks|thank you)\b",
+            lower,
+        )
+    ) or bool(re.match(r"^that['’]s ok(?:ay)?\b", lower)) or bool(re.match(r"^(nice|great)\s*(,|—|-)\s*", lower)) or bool(
+        re.match(r"^good question\b", lower)
+    )
+
+
+def pick_follow_up(
+    style: InterviewerStyle,
+    answer: str,
+    metrics: Optional[Dict[str, Any]] = None,
+    pack: Optional[str] = None,
+) -> str:
     raw = (answer or "").strip()
     lower = raw.lower()
     metrics = metrics or {}
+
+    if _is_non_answer(raw):
+        pack_hint = (pack or "").lower()
+        is_behavioral = "behavior" in pack_hint or "leadership" in pack_hint
+        if is_behavioral:
+            return {
+                InterviewerStyle.SUPPORTIVE: "That’s okay — pick a different (even small) example and walk me through what you did and what changed?",
+                InterviewerStyle.NEUTRAL: "Okay — pick a different example and tell me what you did and what changed?",
+                InterviewerStyle.COLD: "Pick another example. What did you do, and what was the result?",
+            }[style]
+        return {
+            InterviewerStyle.SUPPORTIVE: "That’s okay — if you’re unsure, talk me through how you’d approach figuring it out. What would you check first?",
+            InterviewerStyle.NEUTRAL: "Okay — how would you approach figuring it out? What’s your first step?",
+            InterviewerStyle.COLD: "Fine. What’s your approach? What’s the first step?",
+        }[style]
 
     # Prefer a summarization follow-up when the answer is very long or delivered at high pace.
     speaking_rate = _coerce_float(metrics.get("speakingRate"))
@@ -414,6 +563,28 @@ def generate_coaching(style: InterviewerStyle, answer: str, metrics: Optional[Di
     """Heuristic coach that blends content + delivery signals into two actionable tips."""
     metrics = metrics or {}
     raw = answer.strip()
+    if _is_non_answer(raw):
+        tone_prefix = {
+            InterviewerStyle.SUPPORTIVE: "Encouraging: ",
+            InterviewerStyle.NEUTRAL: "",
+            InterviewerStyle.COLD: "Direct: ",
+        }[style]
+        return [
+            {
+                "summary": "Turn “I don’t know” into signal",
+                "detail": (
+                    f"{tone_prefix}It’s okay to say you don’t know—then add one sentence on how you’d find out "
+                    "(first check, assumption to validate, or experiment to run)."
+                ),
+            },
+            {
+                "summary": "Ask one clarifying constraint",
+                "detail": (
+                    f"{tone_prefix}If you’re stuck, ask a quick clarifier (scale, goals, constraints), then state your first step. "
+                    "That reads confident instead of blank."
+                ),
+            },
+        ]
     length = len(raw)
     has_digits = any(ch.isdigit() for ch in raw)
     has_pause_text = "..." in raw or "  " in raw
@@ -1036,9 +1207,26 @@ async def send_question(
             question = pick_question(state.style, state.turn, state.pack, state.difficulty)
             LOG.info("Question fallback: style=%s turn=%s", state.style, state.turn)
 
+    preface: Optional[str] = None
+    if state.history:
+        last_answer = state.history[-1][1] if state.history else ""
+        if _is_non_answer(last_answer):
+            preface = _non_answer_ack_prefix(state.style) if question_source != "follow_up" else _non_answer_reframe_preface(state.style)
+        else:
+            preface = _answer_ack_preface(state.style)
+        if preface and _question_starts_with_ack(question):
+            preface = None
+
     state.last_question = question
     await ws.send_json(
-        {"type": "question", "turn": state.turn, "question": question, "style": state.style, "source": question_source}
+        {
+            "type": "question",
+            "turn": state.turn,
+            "question": question,
+            "style": state.style,
+            "source": question_source,
+            "preface": preface,
+        }
     )
     if question_source == "follow_up":
         await ws.send_json(
@@ -1062,6 +1250,7 @@ async def send_question(
                             "turn": state.turn,
                             "answer_turn": state.turn + 1,
                             "question": question,
+                            "preface": preface,
                             "style": state.style.value,
                             "pack": state.pack,
                             "difficulty": state.difficulty,
@@ -1081,12 +1270,16 @@ async def send_reaction(
     follow_up: Optional[str] = None
     tips: Optional[List[Dict[str, str]]] = None
 
+    non_answer = _is_non_answer(answer or "")
     llm_result = await llm_generate_coaching(state.style, question, answer, turn, metrics)
     if llm_result:
         follow_up, tips = llm_result
 
+    if non_answer:
+        follow_up = pick_follow_up(state.style, answer, metrics, pack=state.pack)
+
     if not follow_up:
-        follow_up = pick_follow_up(state.style, answer, metrics)
+        follow_up = pick_follow_up(state.style, answer, metrics, pack=state.pack)
         LOG.info("Follow-up fallback: style=%s turn=%s", state.style, turn)
     if not tips:
         tips = generate_coaching(state.style, answer, metrics)

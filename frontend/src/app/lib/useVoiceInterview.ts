@@ -25,6 +25,7 @@ type VoiceInterviewParams = {
   status: SessionStatus;
   style: Style;
   question: string;
+  questionPreface?: string | null;
   interviewerCue?: InterviewerCue | null;
   sessionId: string | null;
   turn: number;
@@ -46,6 +47,7 @@ export function useVoiceInterview({
   status,
   style,
   question,
+  questionPreface,
   interviewerCue,
   sessionId,
   turn,
@@ -547,15 +549,24 @@ export function useVoiceInterview({
       if (status !== "active") lastSpokenQuestionRef.current = "";
       return;
     }
-    if (lastSpokenQuestionRef.current === question) return;
-    lastSpokenQuestionRef.current = question;
+    const key = `${questionPreface ?? ""}||${question}`;
+    if (lastSpokenQuestionRef.current === key) return;
+    lastSpokenQuestionRef.current = key;
     stopRecording();
-    speakQuestion(question, () => {
-      if (autoListen) {
-        startRecording();
-      }
-    });
-  }, [autoListen, question, speakQuestion, startRecording, status, stopRecording]);
+    const speakMain = () => {
+      speakQuestion(question, () => {
+        if (autoListen) {
+          startRecording();
+        }
+      });
+    };
+    const preface = questionPreface?.trim();
+    if (preface) {
+      speakQuestion(preface, speakMain);
+    } else {
+      speakMain();
+    }
+  }, [autoListen, question, questionPreface, speakQuestion, startRecording, status, stopRecording]);
 
   const sendDraft = useCallback(() => {
     const trimmed = draft.trim();
