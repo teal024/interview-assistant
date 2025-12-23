@@ -1,0 +1,16 @@
+.env
+.env.*
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.db
+*.sqlite*
+*.log
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.git/
+.gitignore
+*:Zone.Identifier
+*.Identifier

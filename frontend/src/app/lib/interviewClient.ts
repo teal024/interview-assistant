@@ -17,6 +17,7 @@ export type Tip = { summary: string; detail: string };
 export type SessionStatus = "idle" | "connecting" | "connected" | "active" | "error" | "closed";
 
 export type InterviewerCue = { id: number; text: string };
+export type SessionEnded = { reason: string; message: string; turn: number };
 
 export type Analytics = {
   speakingRate: number; // words per minute (estimate)
@@ -277,6 +278,7 @@ export function useInterview() {
   const [analytics, setAnalytics] = useState<Analytics>(initialAnalytics);
   const [interviewerCue, setInterviewerCue] = useState<InterviewerCue | null>(null);
   const [lastClarification, setLastClarification] = useState<string | null>(null);
+  const [sessionEnded, setSessionEnded] = useState<SessionEnded | null>(null);
   const pendingStart = useRef<{
     style: Style;
     group: "control" | "treatment";
@@ -285,6 +287,9 @@ export function useInterview() {
     notes?: string;
     pack?: string;
     difficulty?: string;
+    maxQuestions?: number;
+    durationSeconds?: number;
+    customQuestions?: string[];
   } | null>(null);
   const latencyRef = useRef<Record<number, number>>({});
   const cueSeqRef = useRef<number>(0);
@@ -300,6 +305,7 @@ export function useInterview() {
     setLastClarification(null);
     setSessionId(null);
     setGroup("treatment");
+    setSessionEnded(null);
     setStatus("idle");
   }, []);
 
@@ -318,8 +324,23 @@ export function useInterview() {
     ws.onopen = () => {
       setStatus("connected");
       if (pendingStart.current) {
-        const { style: s, group: g, consent, accent, notes, pack, difficulty } = pendingStart.current;
-        ws.send(JSON.stringify({ type: "start_session", style: s, group: g, consent, accent, notes, pack, difficulty }));
+        const { style: s, group: g, consent, accent, notes, pack, difficulty, maxQuestions, durationSeconds, customQuestions } =
+          pendingStart.current;
+        ws.send(
+          JSON.stringify({
+            type: "start_session",
+            style: s,
+            group: g,
+            consent,
+            accent,
+            notes,
+            pack,
+            difficulty,
+            maxQuestions,
+            durationSeconds,
+            customQuestions,
+          }),
+        );
         setStatus("active");
         pendingStart.current = null;
       }
@@ -352,6 +373,7 @@ export function useInterview() {
             const nextGroup = readGroup(data.group);
             if (nextGroup) setGroup(nextGroup);
           }
+          setSessionEnded(null);
           setStatus("active");
           break;
         case "question":
@@ -378,6 +400,26 @@ export function useInterview() {
                 },
               ];
             });
+          }
+          break;
+        case "session_ended":
+          {
+            const message = readString(data.message) ?? "";
+            const reason = readString(data.reason) ?? "unknown";
+            const endedTurn = readNumber(data.turn) ?? 0;
+            setSessionEnded({ reason, message, turn: endedTurn });
+            if (message) {
+              setMessages((prev) => [
+                ...prev,
+                {
+                  role: "interviewer",
+                  content: message,
+                  turn: endedTurn,
+                  style,
+                },
+              ]);
+            }
+            setStatus("closed");
           }
           break;
         case "clarification":
@@ -461,6 +503,9 @@ export function useInterview() {
       notes?: string,
       pack?: string,
       difficulty?: string,
+      maxQuestions?: number,
+      durationSeconds?: number,
+      customQuestions?: string[],
     ) => {
       setStyle(initialStyle);
       setGroup(initialGroup);
@@ -473,12 +518,38 @@ export function useInterview() {
       setSessionId(null);
       setInterviewerCue(null);
       setLastClarification(null);
+      setSessionEnded(null);
       if (socket && socket.readyState === WebSocket.OPEN) {
-        socket.send(JSON.stringify({ type: "start_session", style: initialStyle, group: initialGroup, consent, accent, notes, pack, difficulty }));
+        socket.send(
+          JSON.stringify({
+            type: "start_session",
+            style: initialStyle,
+            group: initialGroup,
+            consent,
+            accent,
+            notes,
+            pack,
+            difficulty,
+            maxQuestions,
+            durationSeconds,
+            customQuestions,
+          }),
+        );
         setStatus("active");
         return;
       }
-      pendingStart.current = { style: initialStyle, group: initialGroup, consent, accent, notes, pack, difficulty };
+      pendingStart.current = {
+        style: initialStyle,
+        group: initialGroup,
+        consent,
+        accent,
+        notes,
+        pack,
+        difficulty,
+        maxQuestions,
+        durationSeconds,
+        customQuestions,
+      };
       connect();
     },
     [connect, socket],
@@ -563,5 +634,6 @@ export function useInterview() {
     sendTelemetry,
     interviewerCue,
     lastClarification,
+    sessionEnded,
   };
 }

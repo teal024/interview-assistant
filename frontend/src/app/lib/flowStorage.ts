@@ -5,6 +5,7 @@ import type { ChatMessage, Style, Tip } from "./interviewClient";
 
 export type PracticePack = "swe_behavioral" | "swe_system_design" | "data_science_ml" | "leadership";
 export type Difficulty = "standard" | "hard";
+export type LimitMode = "none" | "questions" | "time";
 
 export type InterviewSetup = {
   pack: PracticePack;
@@ -14,6 +15,10 @@ export type InterviewSetup = {
   consent: boolean;
   accent: string;
   notes: string;
+  limitMode: LimitMode;
+  maxQuestions: number;
+  durationMinutes: number;
+  customQuestions: string[];
   autoListen: boolean;
   autoSendVoice: boolean;
   nudgesEnabled: boolean;
@@ -42,6 +47,10 @@ export const DEFAULT_SETUP: InterviewSetup = {
   consent: false,
   accent: "",
   notes: "",
+  limitMode: "none",
+  maxQuestions: 8,
+  durationMinutes: 15,
+  customQuestions: [],
   autoListen: true,
   autoSendVoice: true,
   nudgesEnabled: true,
@@ -83,6 +92,18 @@ export function loadSetup(): InterviewSetup | null {
   const difficulty = parsed.difficulty === "standard" || parsed.difficulty === "hard" ? parsed.difficulty : DEFAULT_SETUP.difficulty;
   const style = parsed.style === "supportive" || parsed.style === "neutral" || parsed.style === "cold" ? parsed.style : DEFAULT_SETUP.style;
   const group = parsed.group === "control" || parsed.group === "treatment" ? parsed.group : DEFAULT_SETUP.group;
+  const limitMode = parsed.limitMode === "none" || parsed.limitMode === "questions" || parsed.limitMode === "time" ? parsed.limitMode : DEFAULT_SETUP.limitMode;
+  const maxQuestions =
+    typeof parsed.maxQuestions === "number" && Number.isFinite(parsed.maxQuestions)
+      ? Math.min(50, Math.max(1, Math.round(parsed.maxQuestions)))
+      : DEFAULT_SETUP.maxQuestions;
+  const durationMinutes =
+    typeof parsed.durationMinutes === "number" && Number.isFinite(parsed.durationMinutes)
+      ? Math.min(180, Math.max(1, Math.round(parsed.durationMinutes)))
+      : DEFAULT_SETUP.durationMinutes;
+  const customQuestions = Array.isArray(parsed.customQuestions)
+    ? parsed.customQuestions.filter((item): item is string => typeof item === "string").slice(0, 24)
+    : DEFAULT_SETUP.customQuestions;
 
   cachedSetupSnapshot = {
     ...DEFAULT_SETUP,
@@ -91,6 +112,10 @@ export function loadSetup(): InterviewSetup | null {
     difficulty,
     style,
     group,
+    limitMode,
+    maxQuestions,
+    durationMinutes,
+    customQuestions,
     consent: typeof parsed.consent === "boolean" ? parsed.consent : DEFAULT_SETUP.consent,
     accent: typeof parsed.accent === "string" ? parsed.accent : DEFAULT_SETUP.accent,
     notes: typeof parsed.notes === "string" ? parsed.notes : DEFAULT_SETUP.notes,

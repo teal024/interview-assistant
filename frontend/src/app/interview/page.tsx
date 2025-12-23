@@ -60,6 +60,7 @@ function InterviewInner({ setup }: { setup: InterviewSetup | null }) {
     turn,
     interviewerCue,
     lastClarification,
+    sessionEnded,
   } = useInterview();
 
   const { metrics: sensorMetrics, videoRef, streamError, stream: mediaStream } = useMediaSensors(status === "active");
@@ -110,23 +111,51 @@ function InterviewInner({ setup }: { setup: InterviewSetup | null }) {
     nudge,
     listening,
     userTalking,
-    startRecording,
-    stopRecording,
-    speakQuestion,
-    sendDraft,
-    sendClarificationDraft,
-  } = voice;
+	    startRecording,
+	    stopRecording,
+	    speakQuestion,
+	    sendDraft,
+	    sendClarificationDraft,
+	  } = voice;
+
+  const autoEndedRef = useRef<boolean>(false);
 
   useEffect(() => {
     if (!setup) return;
     if (status !== "idle" && status !== "closed") return;
     if (!consumeAutostart()) return;
-    start(setup.style, setup.group, setup.consent, setup.accent, setup.notes, setup.pack, setup.difficulty);
+    const maxQuestions = setup.limitMode === "questions" ? setup.maxQuestions : undefined;
+    const durationSeconds = setup.limitMode === "time" ? setup.durationMinutes * 60 : undefined;
+    start(
+      setup.style,
+      setup.group,
+      setup.consent,
+      setup.accent,
+      setup.notes,
+      setup.pack,
+      setup.difficulty,
+      maxQuestions,
+      durationSeconds,
+      setup.customQuestions,
+    );
   }, [setup, start, status]);
 
   const handleStart = useCallback(() => {
     if (!setup) return;
-    start(setup.style, setup.group, setup.consent, setup.accent, setup.notes, setup.pack, setup.difficulty);
+    const maxQuestions = setup.limitMode === "questions" ? setup.maxQuestions : undefined;
+    const durationSeconds = setup.limitMode === "time" ? setup.durationMinutes * 60 : undefined;
+    start(
+      setup.style,
+      setup.group,
+      setup.consent,
+      setup.accent,
+      setup.notes,
+      setup.pack,
+      setup.difficulty,
+      maxQuestions,
+      durationSeconds,
+      setup.customQuestions,
+    );
   }, [setup, start]);
 
   const handleEnd = useCallback(() => {
@@ -143,6 +172,20 @@ function InterviewInner({ setup }: { setup: InterviewSetup | null }) {
     stop();
     router.push(sid ? `/review?sessionId=${encodeURIComponent(sid)}` : "/review");
   }, [messages, router, sessionId, setup, stop, stopRecording, tips]);
+
+  useEffect(() => {
+    if (!setup) return;
+    if (!sessionEnded || autoEndedRef.current) return;
+    autoEndedRef.current = true;
+    stopRecording();
+    setAutoListen(false);
+    const message = sessionEnded.message?.trim();
+    if (message) {
+      speakQuestion(message, handleEnd);
+    } else {
+      handleEnd();
+    }
+  }, [handleEnd, sessionEnded, setAutoListen, setup, speakQuestion, stopRecording]);
 
   useEffect(() => {
     const el = previewRef.current;

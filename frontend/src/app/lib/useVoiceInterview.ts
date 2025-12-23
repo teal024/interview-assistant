@@ -274,16 +274,19 @@ export function useVoiceInterview({
       setRecordingMode(mode);
       recordingModeRef.current = mode;
       const usableAudioTracks = mediaStream?.getAudioTracks().filter((track) => track.readyState === "live") ?? [];
-      const sourceStream =
-        usableAudioTracks.length > 0
-          ? mediaStream
-          : await navigator.mediaDevices.getUserMedia({
-              audio: true,
-              video: false,
-            });
-      const ownsSourceStream = sourceStream !== mediaStream;
+      let sourceStream: MediaStream;
+      let ownsSourceStream = false;
+      if (mediaStream && usableAudioTracks.length > 0) {
+        sourceStream = mediaStream;
+      } else {
+        sourceStream = await navigator.mediaDevices.getUserMedia({
+          audio: true,
+          video: false,
+        });
+        ownsSourceStream = true;
+      }
 
-      const audioTracks = sourceStream?.getAudioTracks().filter((track) => track.readyState === "live") ?? [];
+      const audioTracks = sourceStream.getAudioTracks().filter((track) => track.readyState === "live");
       if (audioTracks.length === 0) {
         throw new Error("no-audio-track");
       }

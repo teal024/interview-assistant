@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 import styles from "../flow.module.css";
 import { STYLE_HELP, STYLE_LABELS } from "../lib/interviewClient";
-import { DEFAULT_SETUP, saveSetup, useStoredSetup, type Difficulty, type PracticePack } from "../lib/flowStorage";
+import { DEFAULT_SETUP, saveSetup, useStoredSetup, type Difficulty, type LimitMode, type PracticePack } from "../lib/flowStorage";
 
 const PACK_LABELS: Record<PracticePack, string> = {
   swe_behavioral: "SWE behavioral",
@@ -31,6 +31,12 @@ const PACK_RUBRIC: Record<PracticePack, string[]> = {
 const DIFFICULTY_LABELS: Record<Difficulty, string> = {
   standard: "Standard",
   hard: "Hard",
+};
+
+const LIMIT_MODE_LABELS: Record<LimitMode, string> = {
+  none: "Unlimited",
+  questions: "Question count",
+  time: "Time limit",
 };
 
 export default function SetupPage() {
@@ -167,6 +173,76 @@ export default function SetupPage() {
                       placeholder="Any accessibility or fairness notes"
                     />
                   </label>
+                </div>
+
+                <div className={styles.section}>
+                  <h3 className={styles.cardTitle}>Session length</h3>
+                  <div className={styles.pillRow} role="radiogroup" aria-label="Session length">
+                    {(["none", "questions", "time"] as const).map((mode) => (
+                      <button
+                        key={mode}
+                        type="button"
+                        role="radio"
+                        aria-checked={setup.limitMode === mode}
+                        className={`${styles.pill} ${setup.limitMode === mode ? styles.pillActive : ""}`}
+                        onClick={() => saveSetup({ ...setup, limitMode: mode })}
+                      >
+                        {LIMIT_MODE_LABELS[mode]}
+                      </button>
+                    ))}
+                  </div>
+                  {setup.limitMode === "questions" && (
+                    <label className={styles.field} style={{ marginTop: 10, maxWidth: 260 }}>
+                      Questions
+                      <input
+                        className={styles.input}
+                        type="number"
+                        min={1}
+                        max={50}
+                        value={setup.maxQuestions}
+                        onChange={(e) => {
+                          const next = Math.min(50, Math.max(1, Math.round(Number(e.target.value || setup.maxQuestions))));
+                          saveSetup({ ...setup, maxQuestions: next });
+                        }}
+                      />
+                    </label>
+                  )}
+                  {setup.limitMode === "time" && (
+                    <label className={styles.field} style={{ marginTop: 10, maxWidth: 260 }}>
+                      Minutes
+                      <input
+                        className={styles.input}
+                        type="number"
+                        min={1}
+                        max={180}
+                        value={setup.durationMinutes}
+                        onChange={(e) => {
+                          const next = Math.min(180, Math.max(1, Math.round(Number(e.target.value || setup.durationMinutes))));
+                          saveSetup({ ...setup, durationMinutes: next });
+                        }}
+                      />
+                    </label>
+                  )}
+                  <p className={styles.helper}>
+                    Question count includes follow-ups. Time limit ends the session automatically when it expires.
+                  </p>
+                </div>
+
+                <div className={styles.section}>
+                  <h3 className={styles.cardTitle}>Your questions (optional)</h3>
+                  <label className={styles.field}>
+                    Add one per line
+                    <textarea
+                      className={styles.textarea}
+                      value={setup.customQuestions.join("\n")}
+                      placeholder={"e.g.\nTell me about a time you handled a production incident.\nExplain eventual consistency in simple terms."}
+                      onChange={(e) => {
+                        const next = e.target.value.split("\n").slice(0, 24);
+                        saveSetup({ ...setup, customQuestions: next });
+                      }}
+                    />
+                  </label>
+                  <p className={styles.helper}>We’ll ask these first, then continue with the selected pack.</p>
                 </div>
 
                 <div className={styles.section}>

@@ -1,0 +1,56 @@
+ARG CUDA_IMAGE=nvidia/cuda:12.1.1-runtime-ubuntu22.04
+FROM ${CUDA_IMAGE}
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1
+
+WORKDIR /app
+
+# Runtime deps:
+# - ffmpeg: required by faster-whisper to decode browser audio (WebM/Opus)
+# - libsndfile1: required by python-soundfile (used by /tts)
+# - libgomp1: required by ctranslate2 (used by faster-whisper)
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        python3 \
+        python3-pip \
+        python3-venv \
+        ffmpeg \
+        libsndfile1 \
+        libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN ln -sf /usr/bin/python3 /usr/local/bin/python \
+    && python -m pip install --upgrade pip
+
+COPY requirements.txt .
+RUN python -m pip install --no-cache-dir -r requirements.txt
+
+# Install CUDA-enabled PyTorch for GPU TTS.
+# Keep this as a build arg so you can match it to the CUDA version on your server.
+ARG TORCH_INDEX_URL=https://download.pytorch.org/whl/cu121
+RUN python -m pip install --no-cache-dir --index-url ${TORCH_INDEX_URL} torch torchaudio
+
+COPY app ./app
+
+RUN useradd --create-home --uid 10001 appuser \
+    && mkdir -p /data \
+    && chown -R appuser:appuser /app /data
+
+ENV DATABASE_URL=sqlite+aiosqlite:////data/data.db \
+    HF_HOME=/data/hf \
+    XDG_CACHE_HOME=/data/cache \
+    NUMBA_CACHE_DIR=/data/numba \
+    WHISPER_DEVICE=cuda \
+    WHISPER_COMPUTE_TYPE=float16 \
+    TTS_DEVICE=cuda
+
+VOLUME ["/data"]
+
+EXPOSE 8000
+
+USER appuser
+
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

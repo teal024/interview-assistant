@@ -29,11 +29,14 @@ from collections import OrderedDict
 import httpx
 from app.db import get_session, init_db
 from app.models import AnswerRecord, CheckInRecord, SessionRecord, TelemetryRecord
+import logging
+import traceback
+
+os.environ.setdefault("NUMBA_CACHE_DIR", "/tmp/numba")
+
 from faster_whisper import WhisperModel
 from TTS.api import TTS
 import soundfile as sf
-import logging
-import traceback
 
 
 class InterviewerStyle(str, Enum):
@@ -67,6 +70,13 @@ class SessionState:
         self.last_question: Optional[str] = None
         self.history: List[Tuple[str, str]] = []  # recent (question, answer) pairs
         self.awaiting_followup: bool = False
+        self.max_questions: Optional[int] = None
+        self.duration_seconds: Optional[int] = None
+        self.session_started_at: Optional[float] = None  # monotonic seconds
+        self.session_ends_at: Optional[float] = None  # monotonic seconds
+        self.custom_questions: List[str] = []
+        self.custom_queue: List[str] = []
+        self.ended: bool = False
 
 
 QUESTION_BANK: Dict[InterviewerStyle, List[str]] = {
@@ -484,6 +494,102 @@ def _question_starts_with_ack(question: str) -> bool:
     ) or bool(re.match(r"^that['’]s ok(?:ay)?\b", lower)) or bool(re.match(r"^(nice|great)\s*(,|—|-)\s*", lower)) or bool(
         re.match(r"^good question\b", lower)
     )
+
+
+def _coerce_bounded_int(value: Any, min_value: int, max_value: int) -> Optional[int]:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return max(min_value, min(max_value, parsed))
+
+
+def _sanitize_custom_questions(value: Any) -> List[str]:
+    if not isinstance(value, list):
+        return []
+    cleaned: List[str] = []
+    for item in value:
+        if not isinstance(item, str):
+            continue
+        text = item.strip()
+        text = re.sub(r"^\s*[-*•]\s*", "", text).strip()
+        text = re.sub(r"\s+", " ", text).strip()
+        if not text:
+            continue
+        if len(text) > 280:
+            text = text[:280].rstrip()
+        if not text.endswith("?"):
+            text = f"{text}?"
+        cleaned.append(text)
+        if len(cleaned) >= 24:
+            break
+    # de-dupe while preserving order
+    seen: set[str] = set()
+    deduped: List[str] = []
+    for item in cleaned:
+        key = item.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(item)
+    return deduped
+
+
+def _session_end_message(style: InterviewerStyle, reason: str) -> str:
+    if reason == "time_limit":
+        return {
+            InterviewerStyle.SUPPORTIVE: "That’s time — nice work. Let’s review.",
+            InterviewerStyle.NEUTRAL: "Time’s up. Let’s review.",
+            InterviewerStyle.COLD: "Time. Review your answers.",
+        }[style]
+    if reason == "max_questions":
+        return {
+            InterviewerStyle.SUPPORTIVE: "That’s the end of the set — nice work. Let’s review.",
+            InterviewerStyle.NEUTRAL: "That’s the end of the set. Let’s review.",
+            InterviewerStyle.COLD: "That’s the set. Review.",
+        }[style]
+    return {
+        InterviewerStyle.SUPPORTIVE: "Okay — we’ll stop here. Let’s review.",
+        InterviewerStyle.NEUTRAL: "Okay — stopping here. Let’s review.",
+        InterviewerStyle.COLD: "Stop. Review.",
+    }[style]
+
+
+async def end_session(ws: WebSocket, state: SessionState, reason: str) -> None:
+    if state.ended:
+        return
+    state.ended = True
+    message = _session_end_message(state.style, reason)
+    try:
+        await ws.send_json(
+            {
+                "type": "session_ended",
+                "session_id": state.session_id,
+                "turn": state.turn,
+                "reason": reason,
+                "message": message,
+            }
+        )
+    except Exception:
+        # Best-effort: client may already be gone.
+        return
+    try:
+        async with get_session() as session:
+            session.add(
+                TelemetryRecord(
+                    session_id=state.session_id,
+                    event_type="session_end",
+                    group_name=state.group,
+                    payload=json.dumps({"turn": state.turn, "reason": reason}),
+                )
+            )
+            await session.commit()
+    except Exception as exc:
+        LOG.warning("Failed to log session end telemetry (session=%s): %s", state.session_id, exc)
+    try:
+        await ws.close()
+    except Exception:
+        return
 
 
 def pick_follow_up(
@@ -1201,11 +1307,17 @@ async def send_question(
     if override_question:
         question = override_question
     else:
-        question = await llm_generate_question(state.style, state.turn, state.last_question, state.history, state.pack, state.difficulty)
-        if not question:
-            question_source = "fallback"
-            question = pick_question(state.style, state.turn, state.pack, state.difficulty)
-            LOG.info("Question fallback: style=%s turn=%s", state.style, state.turn)
+        if state.custom_queue:
+            question_source = "custom"
+            question = state.custom_queue.pop(0)
+        else:
+            question = await llm_generate_question(
+                state.style, state.turn, state.last_question, state.history, state.pack, state.difficulty
+            )
+            if not question:
+                question_source = "fallback"
+                question = pick_question(state.style, state.turn, state.pack, state.difficulty)
+                LOG.info("Question fallback: style=%s turn=%s", state.style, state.turn)
 
     preface: Optional[str] = None
     if state.history:
@@ -1300,10 +1412,22 @@ async def handle_message(ws: WebSocket, state: SessionState, payload: Dict[str, 
         group = payload.get("group") or state.group
         requested_pack = payload.get("pack")
         requested_difficulty = payload.get("difficulty")
+        requested_max_questions = payload.get("maxQuestions")
+        requested_duration_seconds = payload.get("durationSeconds")
+        requested_custom_questions = payload.get("customQuestions")
         state.turn = 0
         state.last_question = None
         state.history = []
         state.awaiting_followup = False
+        state.max_questions = _coerce_bounded_int(requested_max_questions, 1, 50)
+        state.duration_seconds = _coerce_bounded_int(requested_duration_seconds, 30, 10800)
+        state.session_started_at = time.monotonic()
+        state.session_ends_at = (
+            state.session_started_at + state.duration_seconds if state.duration_seconds is not None else None
+        )
+        state.custom_questions = _sanitize_custom_questions(requested_custom_questions)
+        state.custom_queue = list(state.custom_questions)
+        state.ended = False
         state.consented = bool(payload.get("consent"))
         state.accent = payload.get("accent")
         state.notes = payload.get("notes")
@@ -1330,7 +1454,15 @@ async def handle_message(ws: WebSocket, state: SessionState, payload: Dict[str, 
                     session_id=state.session_id,
                     event_type="session_meta",
                     group_name=group,
-                    payload=json.dumps({"pack": state.pack, "difficulty": state.difficulty}),
+                    payload=json.dumps(
+                        {
+                            "pack": state.pack,
+                            "difficulty": state.difficulty,
+                            "max_questions": state.max_questions,
+                            "duration_seconds": state.duration_seconds,
+                            "custom_questions": state.custom_questions,
+                        }
+                    ),
                 )
             )
             await session.commit()
@@ -1344,6 +1476,9 @@ async def handle_message(ws: WebSocket, state: SessionState, payload: Dict[str, 
                 "consent": state.consented,
                 "pack": state.pack,
                 "difficulty": state.difficulty,
+                "maxQuestions": state.max_questions,
+                "durationSeconds": state.duration_seconds,
+                "customQuestionCount": len(state.custom_questions),
             }
         )
         await send_question(ws, state)
@@ -1354,6 +1489,12 @@ async def handle_message(ws: WebSocket, state: SessionState, payload: Dict[str, 
         if new_style and new_style in InterviewerStyle._value2member_map_:
             state.style = InterviewerStyle(new_style)
             await ws.send_json({"type": "style_switched", "style": state.style})
+            if state.max_questions is not None and state.turn >= state.max_questions:
+                await end_session(ws, state, reason="max_questions")
+                return
+            if state.session_ends_at is not None and time.monotonic() >= state.session_ends_at:
+                await end_session(ws, state, reason="time_limit")
+                return
             await send_question(ws, state)
         return
 
@@ -1470,6 +1611,13 @@ async def handle_message(ws: WebSocket, state: SessionState, payload: Dict[str, 
             except Exception as exc:
                 LOG.warning("Failed to log tips telemetry (session=%s): %s", state.session_id, exc)
 
+        if state.max_questions is not None and state.turn >= state.max_questions:
+            await end_session(ws, state, reason="max_questions")
+            return
+        if state.session_ends_at is not None and time.monotonic() >= state.session_ends_at:
+            await end_session(ws, state, reason="time_limit")
+            return
+
         if state.awaiting_followup:
             # This answer was for a follow-up; resume normal questioning.
             state.awaiting_followup = False
@@ -1526,7 +1674,18 @@ async def interview_socket(ws: WebSocket) -> None:
 
     try:
         while True:
-            raw = await ws.receive_text()
+            if state.session_ends_at is not None:
+                remaining = state.session_ends_at - time.monotonic()
+                if remaining <= 0:
+                    await end_session(ws, state, reason="time_limit")
+                    return
+                try:
+                    raw = await asyncio.wait_for(ws.receive_text(), timeout=remaining)
+                except asyncio.TimeoutError:
+                    await end_session(ws, state, reason="time_limit")
+                    return
+            else:
+                raw = await ws.receive_text()
             try:
                 payload = json.loads(raw)
             except json.JSONDecodeError:
@@ -1537,6 +1696,8 @@ async def interview_socket(ws: WebSocket) -> None:
                 continue
 
             await handle_message(ws, state, payload)
+            if state.ended:
+                return
             await asyncio.sleep(0)  # yield control
     except WebSocketDisconnect:
         return

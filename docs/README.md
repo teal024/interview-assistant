@@ -23,13 +23,14 @@ Visit `http://localhost:3000` and click **Start Interview**.
 
 ## Message protocol (beta)
 - `session_ready` (server → client): { session_id, style }
-- `start_session` (client → server): { type: "start_session", style }
+- `start_session` (client → server): { type: "start_session", style, group, consent, accent, notes, pack, difficulty, maxQuestions?, durationSeconds?, customQuestions? }
 - `question` (server → client): { type: "question", turn, question, style, preface? } (optional short acknowledgement spoken before the question)
 - `user_answer` (client → server): { type: "user_answer", answer, metrics }
 - `interviewer_message` (server → client): { type: "interviewer_message", turn, message, style }
 - `tips` (server → client): { type: "tips", turn, items: [{summary, detail}] }
 - `switch_style` (client → server): { type: "switch_style", style }
 - `style_switched` (server → client): { type: "style_switched", style }
+- `session_ended` (server → client): { type: "session_ended", reason, message, turn, session_id } (e.g., maxQuestions/time limit hit)
 - `telemetry` (client → server): { type: "telemetry", event, latencyMs, data } (e.g., round-trip latency per turn)
 - `checkin` (client → server): { type: "checkin", group, confidence, stress } → `checkin_logged`
 - `ping`/`pong` for keepalive.
